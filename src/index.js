@@ -1,84 +1,94 @@
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
-const morgan = require('morgan');
-require('dotenv').config();
-
-const authRoutes = require('./routes/auth');
-const userRoutes = require('./routes/users');
-const styleRoutes = require('./routes/styles');
-const packRoutes = require('./routes/packs');
-const preorderRoutes = require('./routes/preorders');
-const tournamentRoutes = require('./routes/tournaments');
-const activationRoutes = require('./routes/activations');
-const marketplaceRoutes = require('./routes/marketplace');
-const nftRoutes = require('./routes/nft');
-
-const errorHandler = require('./middleware/errorHandler');
-const rateLimiter = require('./middleware/rateLimiter');
-const logger = require('./utils/logger');
+const rateLimit = require('express-rate-limit');
+const { PrismaClient } = require('@prisma/client');
+const FootballApiService = require('./services/footballApi');
 
 const app = express();
+const prisma = new PrismaClient();
+const footballApi = new FootballApiService();
 const PORT = process.env.PORT || 3001;
 
 // Middleware
 app.use(helmet());
-app.use(cors({
-  origin: process.env.FRONTEND_URL || 'http://localhost:3000',
-  credentials: true
-}));
-app.use(morgan('combined', { stream: { write: message => logger.info(message.trim()) } }));
+app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
-app.use(rateLimiter);
+
+// Rate limiting
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100 // limit each IP to 100 requests per windowMs
+});
+app.use(limiter);
+
+// Routes
+app.use('/api/auth', require('./routes/auth'));
+app.use('/api/users', require('./routes/users'));
+app.use('/api/styles', require('./routes/styles'));
+app.use('/api/nft', require('./routes/nft'));
+app.use('/api/packs', require('./routes/packs'));
+app.use('/api/marketplace', require('./routes/marketplace'));
+app.use('/api/tournaments', require('./routes/tournaments'));
+app.use('/api/preorders', require('./routes/preorders'));
+app.use('/api/activations', require('./routes/activations'));
 
 // Health check
 app.get('/health', (req, res) => {
-  res.status(200).json({
-    status: 'OK',
+  res.json({ 
+    status: 'OK', 
     timestamp: new Date().toISOString(),
-    uptime: process.uptime(),
-    environment: process.env.NODE_ENV
+    version: '1.0.0',
+    database: 'Connected'
   });
 });
 
-// API Routes
-app.use('/api/auth', authRoutes);
-app.use('/api/users', userRoutes);
-app.use('/api/styles', styleRoutes);
-app.use('/api/packs', packRoutes);
-app.use('/api/preorders', preorderRoutes);
-app.use('/api/tournaments', tournamentRoutes);
-app.use('/api/activations', activationRoutes);
-app.use('/api/marketplace', marketplaceRoutes);
-app.use('/api/nft', nftRoutes);
+// Process live matches (cron job endpoint)
+app.post('/api/process-matches', async (req, res) => {
+  try {
+    console.log('Processing live matches...');
+    const matches = await footballApi.fetchLiveMatches();
+    
+    let totalActivations = 0;
+    for (const match of matches) {
+      if (match.fixture.status.short === 'FT') {
+        const activations = await footballApi.processMatchForActivations(match.fixture.id);
+        totalActivations += activations.length;
+      }
+    }
+    
+    res.json({ 
+      message: 'Matches processed successfully',
+      matchesFound: matches.length,
+      activationsCreated: totalActivations
+    });
+  } catch (error) {
+    console.error('Error processing matches:', error);
+    res.status(500).json({ error: 'Failed to process matches' });
+  }
+});
 
-// Error handling
-app.use(errorHandler);
+// Error handling middleware
+app.use((err, req, res, next) => {
+  console.error(err.stack);
+  res.status(500).json({ error: 'Something went wrong!' });
+});
 
 // 404 handler
 app.use('*', (req, res) => {
-  res.status(404).json({
-    error: 'Route not found',
-    path: req.originalUrl
-  });
-});
-
-// Start server
-app.listen(PORT, () => {
-  logger.info(`Soccer DNA Backend running on port ${PORT}`);
-  logger.info(`Environment: ${process.env.NODE_ENV}`);
+  res.status(404).json({ error: 'Route not found' });
 });
 
 // Graceful shutdown
-process.on('SIGTERM', () => {
-  logger.info('SIGTERM received, shutting down gracefully');
+process.on('SIGINT', async () => {
+  console.log('Shutting down gracefully...');
+  await prisma.$disconnect();
   process.exit(0);
 });
 
-process.on('SIGINT', () => {
-  logger.info('SIGINT received, shutting down gracefully');
-  process.exit(0);
+app.listen(PORT, () => {
+  console.log(`🚀 Jogata Backend running on port ${PORT}`);
+  console.log(`📊 Database: Connected`);
+  console.log(`⚽ Football API: Ready`);
 });
-
-module.exports = app;

@@ -1,137 +1,154 @@
 const express = require('express');
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
+const { PrismaClient } = require('@prisma/client');
 const { body, validationResult } = require('express-validator');
-const { authLimiter } = require('../middleware/rateLimiter');
-const { authenticateToken } = require('../middleware/auth');
-const { csrfProtection } = require('../middleware/csrf');
-const authService = require('../services/authService');
-const logger = require('../utils/logger');
-const { sanitizeForLog } = require('../utils/sanitize');
 
 const router = express.Router();
-
-// Apply auth rate limiter to all auth routes
-router.use(authLimiter);
+const prisma = new PrismaClient();
 
 // Register
-router.post('/register', authLimiter, [
-  body('email').isEmail().normalizeEmail().withMessage('Valid email required'),
-  body('username').isLength({ min: 3, max: 20 }).matches(/^[a-zA-Z0-9_]+$/).withMessage('Username: 3-20 chars, letters/numbers/underscore only'),
-  body('password').isLength({ min: 8 }).matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/).withMessage('Password: min 8 chars, uppercase, lowercase, number'),
-], async (req, res, next) => {
+router.post('/register', [
+  body('email').isEmail().normalizeEmail(),
+  body('username').isLength({ min: 3, max: 20 }).trim(),
+  body('password').isLength({ min: 6 })
+], async (req, res) => {
   try {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
-      return res.status(400).json({
-        error: 'Validation failed',
-        details: errors.array()
-      });
+      return res.status(400).json({ errors: errors.array() });
     }
 
     const { email, username, password } = req.body;
-    const result = await authService.register({ email, username, password });
+    
+    // Check if user exists
+    const existingUser = await prisma.user.findFirst({
+      where: { OR: [{ email }, { username }] }
+    });
+    
+    if (existingUser) {
+      return res.status(400).json({ error: 'User already exists' });
+    }
 
-    logger.info(`New user registered: ${sanitizeForLog(email)}`);
+    // Hash password
+    const hashedPassword = await bcrypt.hash(password, 12);
+
+    // Create user
+    const user = await prisma.user.create({
+      data: {
+        email,
+        username,
+        password: hashedPassword
+      },
+      select: {
+        id: true,
+        email: true,
+        username: true,
+        totalPoints: true,
+        createdAt: true
+      }
+    });
+
+    // Generate JWT
+    const token = jwt.sign(
+      { userId: user.id },
+      process.env.JWT_SECRET,
+      { expiresIn: '7d' }
+    );
 
     res.status(201).json({
-      message: 'Registration successful',
-      ...result
+      message: 'User created successfully',
+      token,
+      user
     });
   } catch (error) {
-    if (error.message.includes('already')) {
-      return res.status(409).json({ error: error.message });
-    }
-    next(error);
+    console.error('Registration error:', error);
+    res.status(500).json({ error: 'Server error' });
   }
 });
 
 // Login
-router.post('/login', authLimiter, [
-  body('login').notEmpty().withMessage('Email or username required'),
-  body('password').notEmpty().withMessage('Password required'),
-], async (req, res, next) => {
+router.post('/login', [
+  body('email').isEmail().normalizeEmail(),
+  body('password').exists()
+], async (req, res) => {
   try {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
-      return res.status(400).json({
-        error: 'Validation failed',
-        details: errors.array()
-      });
+      return res.status(400).json({ errors: errors.array() });
     }
 
-    const { login, password } = req.body;
-    const result = await authService.login({ login, password });
+    const { email, password } = req.body;
 
-    logger.info(`User logged in: ${sanitizeForLog(result.user.email)}`);
+    // Find user
+    const user = await prisma.user.findUnique({
+      where: { email }
+    });
+
+    if (!user) {
+      return res.status(400).json({ error: 'Invalid credentials' });
+    }
+
+    // Check password
+    const isMatch = await bcrypt.compare(password, user.password);
+    if (!isMatch) {
+      return res.status(400).json({ error: 'Invalid credentials' });
+    }
+
+    // Generate JWT
+    const token = jwt.sign(
+      { userId: user.id },
+      process.env.JWT_SECRET,
+      { expiresIn: '7d' }
+    );
 
     res.json({
       message: 'Login successful',
-      ...result
+      token,
+      user: {
+        id: user.id,
+        email: user.email,
+        username: user.username,
+        totalPoints: user.totalPoints,
+        walletAddress: user.walletAddress
+      }
     });
   } catch (error) {
-    if (error.message === 'Invalid credentials') {
-      return res.status(401).json({ error: 'Invalid credentials' });
-    }
-    next(error);
-  }
-});
-
-// Connect wallet
-router.post('/connect-wallet', authenticateToken, csrfProtection, [
-  body('walletAddress').matches(/^0x[a-fA-F0-9]{40}$/).withMessage('Invalid wallet address format'),
-], async (req, res, next) => {
-  try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({
-        error: 'Validation failed',
-        details: errors.array()
-      });
-    }
-
-    const { walletAddress } = req.body;
-    const user = await authService.connectWallet(req.user.id, walletAddress);
-
-    logger.info(`Wallet connected for user: ${sanitizeForLog(user.email)}`);
-
-    res.json({
-      message: 'Wallet connected successfully',
-      user
-    });
-  } catch (error) {
-    if (error.message === 'Wallet already connected') {
-      return res.status(409).json({ error: 'Wallet already connected to another account' });
-    }
-    next(error);
+    console.error('Login error:', error);
+    res.status(500).json({ error: 'Server error' });
   }
 });
 
 // Get current user
-router.get('/me', authenticateToken, async (req, res) => {
-  res.json({
-    user: {
-      id: req.user.id,
-      email: req.user.email,
-      username: req.user.username,
-      isVerified: req.user.isVerified,
-      walletAddress: req.user.walletAddress,
-      profile: req.user.profile
+router.get('/me', async (req, res) => {
+  try {
+    const token = req.header('Authorization')?.replace('Bearer ', '');
+    if (!token) {
+      return res.status(401).json({ error: 'No token provided' });
     }
-  });
-});
 
-// Refresh token
-router.post('/refresh', authenticateToken, async (req, res) => {
-  const token = authService.generateToken(req.user.id);
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const user = await prisma.user.findUnique({
+      where: { id: decoded.userId },
+      select: {
+        id: true,
+        email: true,
+        username: true,
+        totalPoints: true,
+        walletAddress: true,
+        createdAt: true
+      }
+    });
 
-  res.json({
-    message: 'Token refreshed',
-    token
-  });
-});
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
 
-// Logout
-router.post('/logout', authenticateToken, (req, res) => {
-  res.json({ message: 'Logged out successfully' });
+    res.json({ user });
+  } catch (error) {
+    console.error('Auth error:', error);
+    res.status(401).json({ error: 'Invalid token' });
+  }
 });
 
 module.exports = router;

@@ -1,6 +1,3 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -14,354 +11,125 @@ model User {
   id            String   @id @default(cuid())
   email         String   @unique
   username      String   @unique
-  passwordHash  String
-  walletAddress String?  @unique
-  isVerified    Boolean  @default(false)
+  password      String
+  walletAddress String?
+  totalPoints   Int      @default(0)
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
-
-  // User profile
-  profile       UserProfile?
   
-  // Owned styles
-  ownedStyles   UserStyle[]
+  // Relations
+  userStyles UserStyle[]
+  preorders  Preorder[]
   
-  // Tournament participation
-  tournaments   TournamentEntry[]
-  
-  // Marketplace activity
-  marketplaceBuys  MarketplaceListing[] @relation("Buyer")
-  marketplaceSells MarketplaceListing[] @relation("Seller")
-  
-  // Transactions
-  transactions  Transaction[]
-
-  // Pre-orders
-  preOrders     PreOrder[]
-
   @@map("users")
 }
 
-model UserProfile {
-  id          String @id @default(cuid())
-  userId      String @unique
-  user        User   @relation(fields: [userId], references: [id], onDelete: Cascade)
-  
-  displayName String?
-  avatar      String?
-  bio         String?
-  country     String?
-  
-  // Game stats
-  totalPoints    Int @default(0)
-  weeklyRank     Int?
-  overallRank    Int?
-  packsPurchased Int @default(0)
-
-  // Founder status
-  isFounder      Boolean @default(false)
-  founderTier    String? // GENESIS, EARLY, etc.
-  
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-
-  @@map("user_profiles")
-}
-
-model StyleCard {
-  id          String      @id @default(cuid())
-  name        String      @unique
-  description String
-  rarity      StyleRarity
-  category    String
-  
-  // Style attributes
-  attributes  Json // Flexible JSON for style-specific attributes
-  keyMetrics  Json // Key performance metrics for this style
-  
-  // Metadata
-  imageUrl    String?
-  animationUrl String?
-  externalUrl String?
-  
-  // Game mechanics
-  basePoints     Int @default(0)
-  bonusMultiplier Float @default(1.0)
-  maxSupply      Int?
-  currentSupply  Int @default(0)
-  
-  // Activation settings
-  isActive       Boolean @default(true)
-  minThreshold   Float @default(0.7)
-  
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+model Style {
+  id             String   @id @default(cuid())
+  name           String   @unique
+  description    String
+  rarity         Rarity
+  category       String
+  imageUrl       String?
+  totalPoints    Int      @default(0)
+  activationCount Int     @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
   
   // Relations
   userStyles  UserStyle[]
-  activations StyleActivation[]
-  marketplace MarketplaceListing[]
-
-  @@map("style_cards")
+  activations Activation[]
+  
+  @@map("styles")
 }
 
 model UserStyle {
-  id          String @id @default(cuid())
-  userId      String
-  styleCardId String
+  id           String   @id @default(cuid())
+  userId       String
+  styleId      String
+  serialNumber Int?
+  points       Int      @default(0)
+  mintedAt     DateTime @default(now())
   
-  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  styleCard   StyleCard @relation(fields: [styleCardId], references: [id], onDelete: Cascade)
+  // Relations
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  style Style @relation(fields: [styleId], references: [id], onDelete: Cascade)
   
-  // NFT metadata
-  tokenId     String?   @unique
-  mintedAt    DateTime?
-  
-  // Game stats
-  totalPoints    Int @default(0)
-  weeklyPoints   Int @default(0)
-  activationCount Int @default(0)
-  
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-
-  @@unique([userId, styleCardId])
+  @@unique([userId, styleId, serialNumber])
   @@map("user_styles")
 }
 
-model Player {
-  id          String @id @default(cuid())
-  name        String
-  position    String
-  team        String
-  league      String
-  country     String
-  
-  // External IDs
-  externalId  String? @unique // From data provider
-  
-  // Current season stats
-  appearances Int @default(0)
-  goals       Int @default(0)
-  assists     Int @default(0)
-  
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+model Activation {
+  id        String   @id @default(cuid())
+  styleId   String
+  playerId  String
+  playerName String
+  matchId   String
+  leagueId  String
+  points    Int
+  confidence Float   @default(0.0)
+  timestamp DateTime @default(now())
   
   // Relations
-  activations StyleActivation[]
-  performances PlayerPerformance[]
+  style Style @relation(fields: [styleId], references: [id], onDelete: Cascade)
+  
+  @@map("activations")
+}
 
+model Player {
+  id       String @id @default(cuid())
+  apiId    String @unique
+  name     String
+  team     String
+  league   String
+  position String
+  
   @@map("players")
 }
 
-model PlayerPerformance {
-  id          String @id @default(cuid())
-  playerId    String
-  player      Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
+model Match {
+  id        String   @id @default(cuid())
+  apiId     String   @unique
+  homeTeam  String
+  awayTeam  String
+  league    String
+  status    String
+  startTime DateTime
+  processed Boolean  @default(false)
   
-  // Match details
-  matchDate   DateTime
-  opponent    String
-  isHome      Boolean
-  
-  // Performance metrics (JSON for flexibility)
-  stats       Json
-  
-  // Calculated style scores
-  styleScores Json
-  
-  createdAt   DateTime @default(now())
-
-  @@map("player_performances")
+  @@map("matches")
 }
 
-model StyleActivation {
-  id          String @id @default(cuid())
-  styleCardId String
-  playerId    String
-  
-  styleCard   StyleCard @relation(fields: [styleCardId], references: [id], onDelete: Cascade)
-  player      Player    @relation(fields: [playerId], references: [id], onDelete: Cascade)
-  
-  // Activation details
-  gameweek    Int
-  season      String
-  rank        Int // 1st, 2nd, or 3rd activation for this style
-  
-  // Performance data
-  matchDate   DateTime
-  points      Int
-  bonusPoints Int @default(0)
-  
-  // AI confidence
-  confidence  Float
-  
-  createdAt   DateTime @default(now())
-
-  @@unique([styleCardId, gameweek, season, rank])
-  @@map("style_activations")
-}
-
-model Tournament {
-  id          String @id @default(cuid())
-  name        String
-  description String?
-  
-  // Tournament settings
-  entryFee    Int // in cents
-  maxEntries  Int?
-  startDate   DateTime
-  endDate     DateTime
-  
-  // Prize pool
-  totalPrize  Int @default(0)
-  prizeStructure Json
-  
-  status      TournamentStatus @default(UPCOMING)
-  
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+model Preorder {
+  id        String      @id @default(cuid())
+  userId    String
+  packType  PackType
+  quantity  Int         @default(1)
+  status    OrderStatus @default(PENDING)
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
   
   // Relations
-  entries     TournamentEntry[]
-
-  @@map("tournaments")
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@map("preorders")
 }
 
-model TournamentEntry {
-  id           String @id @default(cuid())
-  userId       String
-  tournamentId String
-  
-  user         User       @relation(fields: [userId], references: [id], onDelete: Cascade)
-  tournament   Tournament @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
-  
-  // Entry details
-  entryFee     Int
-  totalPoints  Int @default(0)
-  rank         Int?
-  prize        Int @default(0)
-  
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
-
-  @@unique([userId, tournamentId])
-  @@map("tournament_entries")
-}
-
-model MarketplaceListing {
-  id          String @id @default(cuid())
-  sellerId    String
-  buyerId     String?
-  styleCardId String
-  
-  seller      User      @relation("Seller", fields: [sellerId], references: [id], onDelete: Cascade)
-  buyer       User?     @relation("Buyer", fields: [buyerId], references: [id])
-  styleCard   StyleCard @relation(fields: [styleCardId], references: [id], onDelete: Cascade)
-  
-  // Listing details
-  price       Int // in cents
-  status      ListingStatus @default(ACTIVE)
-  
-  // Timestamps
-  listedAt    DateTime @default(now())
-  soldAt      DateTime?
-  expiresAt   DateTime?
-
-  @@map("marketplace_listings")
-}
-
-model Transaction {
-  id          String @id @default(cuid())
-  userId      String
-  user        User   @relation(fields: [userId], references: [id], onDelete: Cascade)
-  
-  // Transaction details
-  type        TransactionType
-  amount      Int // in cents
-  description String
-  
-  // External references
-  stripePaymentId String?
-  blockchainTxHash String?
-  
-  // Pack purchase specific
-  packType    String?
-  packCount   Int @default(1)
-  
-  status      TransactionStatus @default(PENDING)
-  
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-
-  @@map("transactions")
-}
-
-// Enums
-enum StyleRarity {
+enum Rarity {
   COMMON
   RARE
   LEGENDARY
   MYTHIC
 }
 
-enum TournamentStatus {
-  UPCOMING
-  ACTIVE
-  COMPLETED
-  CANCELLED
+enum PackType {
+  STARTER
+  PREMIUM
+  LEGENDARY
 }
 
-enum ListingStatus {
-  ACTIVE
-  SOLD
-  CANCELLED
-  EXPIRED
-}
-
-enum TransactionType {
-  PACK_PURCHASE
-  PACK_PREORDER
-  MARKETPLACE_BUY
-  MARKETPLACE_SELL
-  TOURNAMENT_ENTRY
-  TOURNAMENT_PRIZE
-  STYLE_FUSION
-  REFUND
-  WITHDRAWAL
-}
-
-enum TransactionStatus {
-  PENDING
-  COMPLETED
-  FAILED
-  REFUNDED
-}
-
-model PreOrder {
-  id            String   @id @default(cuid())
-  userId        String
-  walletAddress String
-  packCount     Int
-  totalAmount   Int      // Amount in cents
-  pricePerPack  Int      // Price per pack in cents
-  status        PreOrderStatus @default(PENDING)
-  isEarlyBird   Boolean  @default(true)
-  packContents  Json     // Pack configuration
-  deliveredPacks Int     @default(0)
-  cancelledAt   DateTime?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@map("pre_orders")
-}
-
-enum PreOrderStatus {
+enum OrderStatus {
   PENDING
   CONFIRMED
-  DELIVERED
   CANCELLED
 }
